@@ -8,7 +8,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
-from sqlalchemy.dialects.postgresql import psycopg2
 
 from config import (
     API_TOKEN,
@@ -57,7 +56,6 @@ db = Database(DB_URI)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
-db = Database(DB_URI)
 scheduler = AsyncIOScheduler(timezone=pytz.timezone(TIMEZONE))
 
 
