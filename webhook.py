@@ -1,33 +1,40 @@
-import hashlib
 from flask import Flask, request
+import hashlib
+
+from config import DB_URI, FREEKASSA_SECRET_2
 from models import Database
-from config import FREEKASSA_SECRET, DB_URI
 
 app = Flask(__name__)
 db = Database(DB_URI)
 
 
-@app.route('/freekassa_webhook', methods=['POST'])
+@app.route("/freekassa_webhook", methods=["POST"])
 def freekassa_webhook():
-    data = request.form
-    signature = data.get('SIGN', '')
-    amount = data.get('AMOUNT', '')
-    user_id = data.get('USER_ID', '')
-    auction_id = data.get('AUCTION_ID', '')
+    data = request.form.to_dict()
+    amount = data.get("AMOUNT") or data.get("AMOUNT", "")
+    order_id = data.get("MERCHANT_ORDER_ID") or data.get("MERCHANT_ORDER_ID", "")
+    received_sign = data.get("SIGN")
 
-    # Проверяем подпись для безопасности
-    expected_signature = hashlib.md5(f"{user_id}:{amount}:{FREEKASSA_SECRET}".encode('utf-8')).hexdigest()
+    # order_id = "auctionId_userId"
+    try:
+        auction_id_str, user_id_str = order_id.split("_")
+        auction_id = int(auction_id_str)
+        user_id = int(user_id_str)
+    except Exception:
+        return "bad order id", 400
 
-    if signature != expected_signature:
-        return "Invalid signature", 400
+    sign_str = f"{amount}:{order_id}:{FREEKASSA_SECRET_2}"
+    expected_sign = hashlib.md5(sign_str.encode("utf-8")).hexdigest()
 
-    # Если подпись верна, обновляем статус платежа в базе данных
-    db.execute_query(
-        "INSERT INTO payments (auction_id, user_id, amount, payment_status) VALUES (%s, %s, %s, 'completed')",
-        (auction_id, user_id, amount))
+    if received_sign != expected_sign:
+        return "invalid sign", 400
+
+    # помечаем платеж успешным
+    db.update_payment_status(auction_id, user_id, "completed")
 
     return "OK", 200
 
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+

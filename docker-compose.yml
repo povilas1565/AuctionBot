@@ -1,53 +1,43 @@
 version: "3.8"
+
 services:
   db:
-    image: postgres:13
+    image: postgres:15
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
       POSTGRES_DB: auction_db
+    ports:
+      - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     networks:
-      - auction_network
-
-  redis:
-    image: redis:alpine
-    networks:
-      - auction_network
+      - auction_net
 
   bot:
     build: .
-    environment:
-      - API_TOKEN=${API_TOKEN}
-      - DB_URI=postgres://postgres:root@db/auction_db
-      - GOOGLE_SHEET_CREDENTIALS=${GOOGLE_SHEET_CREDENTIALS}
-      - FREEKASSA_SECRET=${FREEKASSA_SECRET}
+    env_file:
+      - .env
     depends_on:
       - db
-      - redis
     networks:
-      - auction_network
+      - auction_net
 
   webhook:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      - WEBHOOK_HOST=${WEBHOOK_HOST}
-      - WEBHOOK_PATH=${WEBHOOK_PATH}
-      - FREEKASSA_SECRET=${FREEKASSA_SECRET}
-      - DB_URI=postgres://postgres:root@db/auction_db
+    build: .
+    command: python webhook.py
+    env_file:
+      - .env
     depends_on:
       - db
     ports:
       - "5000:5000"
     networks:
-      - auction_network
-
-networks:
-  auction_network:
-    driver: bridge
+      - auction_net
 
 volumes:
   pg_data:
+
+networks:
+  auction_net:
+    driver: bridge
