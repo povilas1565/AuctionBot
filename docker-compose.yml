@@ -3,6 +3,7 @@ version: "3.8"
 services:
   db:
     image: postgres:15
+    container_name: auction_db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root
@@ -11,11 +12,13 @@ services:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ./create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql:ro
     networks:
       - auction_net
 
   bot:
     build: .
+    container_name: auction_bot
     env_file:
       - .env
     depends_on:
@@ -25,19 +28,40 @@ services:
 
   webhook:
     build: .
+    container_name: auction_webhook
     command: python webhook.py
     env_file:
       - .env
     depends_on:
       - db
+    expose:
+      - "5000"          # только внутри сети docker
+    networks:
+      - auction_net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: auction_caddy
+    restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # папка для сертификатов и т.п.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - webhook
     networks:
       - auction_net
 
 volumes:
   pg_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   auction_net:
     driver: bridge
+
