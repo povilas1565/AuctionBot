@@ -22,7 +22,6 @@ from config import (
     ADMIN_IDS,
 )
 from models import Database
-# db.add_warning_auto_ban, set_ban, increment_warning и т.д. уже есть
 from google_sheets import fetch_base_lots, append_report_row
 from payment import generate_payment_url, generate_qr
 
@@ -40,7 +39,28 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def format_dt(dt: datetime.datetime | None) -> str:
+    if not dt:
+        return "не задано"
+    # Просто человекочитаемый формат, без заморочек с TZ
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def format_remaining(end_time: datetime.datetime | None) -> str:
+    if not end_time:
+        return "—"
+    now = datetime.datetime.now()
+    delta = end_time - now
+    if delta.total_seconds() <= 0:
+        return "завершается"
+    minutes = int(delta.total_seconds() // 60)
+    hours = minutes // 60
+    minutes = minutes % 60
+    return f"{hours} ч {minutes} мин"
+
+
 async def sync_lots_from_sheets():
+    """Читает базу лотов из Google Sheets и создаёт новые в БД."""
     lots = fetch_base_lots()
     for lot in lots:
         if not db.lot_exists(lot["auction_id"]):
@@ -58,10 +78,16 @@ async def sync_lots_from_sheets():
 
 
 async def start_auction(auction_id: int):
+    """Перевод лота в active, установка end_time и публикация в канал."""
     lot = db.get_lot(auction_id)
     if not lot:
+        logging.warning(f"Попытка стартовать несуществующий аукцион {auction_id}")
         return
-    if lot[10] == "active":
+    # lot: (auction_id, name, article, start_price, current_price,
+    #       images, video_url, description, start_time, end_time, status, winner_user_id)
+    status = lot[10]
+    if status == "active":
+        logging.info(f"Аукцион {auction_id} уже активен")
         return
 
     start_time = lot[8]
@@ -73,6 +99,9 @@ async def start_auction(auction_id: int):
 
 
 async def publish_lot_to_channel(auction_id: int, lot_row):
+    """
+    Публикация карточки лота в канал AUCTION_CHANNEL с фото + кнопкой "Участвовать".
+    """
     (
         auction_id_db,
         name,
@@ -88,21 +117,36 @@ async def publish_lot_to_channel(auction_id: int, lot_row):
         winner_user_id,
     ) = lot_row
 
-    text = (
+    remaining = format_remaining(end_time)
+
+    caption = (
         f"🧾 Аукцион №{auction_id}\n\n"
         f"Товар: {name}\n"
         f"Артикул: {article}\n"
         f"Стартовая цена: {start_price}₽\n"
         f"Текущее предложение: {current_price}₽\n"
+        f"⏳ До окончания: {remaining}\n\n"
         f"Описание: {description}\n"
-        f"Старт: {start_time}\n"
-        f"Окончание (текущее): {end_time}\n"
     )
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Участвовать", callback_data=f"join:{auction_id}"))
 
-    await bot.send_message(AUCTION_CHANNEL, text, reply_markup=kb)
+    # Если есть картинки — берем первую как обложку
+    if images and isinstance(images, (list, tuple)) and len(images) > 0:
+        main_image = images[0]
+        try:
+            await bot.send_photo(
+                AUCTION_CHANNEL,
+                photo=main_image,
+                caption=caption,
+                reply_markup=kb,
+            )
+        except Exception as e:
+            logging.error(f"Ошибка отправки фото в канал: {e}")
+            await bot.send_message(AUCTION_CHANNEL, caption, reply_markup=kb)
+    else:
+        await bot.send_message(AUCTION_CHANNEL, caption, reply_markup=kb)
 
 
 async def notify_participants_new_bid(auction_id: int, bidder_id: int, amount):
@@ -120,7 +164,12 @@ async def notify_participants_new_bid(auction_id: int, bidder_id: int, amount):
 
 
 async def send_personal_lot_card(user_id: int, auction_id: int):
-    """Карточка лота в ЛС пользователя с кнопками +50/+100/+200 и вводом своей суммы."""
+    """
+    Карточка лота в ЛС пользователя:
+    - если есть фото → отправляем фото+описание
+    - кнопки +50/+100/+200
+    - кнопка "Ввести свою сумму"
+    """
     lot = db.get_lot(auction_id)
     if not lot:
         await bot.send_message(user_id, "Такого аукциона не существует.")
@@ -141,6 +190,8 @@ async def send_personal_lot_card(user_id: int, auction_id: int):
         winner_user_id,
     ) = lot
 
+    remaining = format_remaining(end_time)
+
     kb = InlineKeyboardMarkup()
     kb.row(
         InlineKeyboardButton("+50₽", callback_data=f"bidquick:{auction_id}:50"),
@@ -150,19 +201,32 @@ async def send_personal_lot_card(user_id: int, auction_id: int):
     kb.add(InlineKeyboardButton("Ввести свою сумму", callback_data=f"bidcustom:{auction_id}"))
 
     text = (
-        f"💼 Ваш личный лот №{auction_id}\n"
+        f"💼 Ваш лот №{auction_id}\n"
         f"Товар: {name}\n"
         f"Артикул: {article}\n"
         f"Текущая цена: {current_price}₽\n"
-        f"Описание: {description}\n"
-        f"Окончание: {end_time}\n\n"
-        "Выберите быстрый шаг или введите свою сумму."
+        f"⏳ До окончания: {remaining}\n\n"
+        f"Описание: {description}\n\n"
+        "Выберите быстрый шаг или введите свою сумму через /bid."
     )
+
+    if images and isinstance(images, (list, tuple)) and len(images) > 0:
+        main_image = images[0]
+        try:
+            await bot.send_photo(user_id, photo=main_image, caption=text, reply_markup=kb)
+            return
+        except Exception as e:
+            logging.error(f"Ошибка отправки фото в ЛС: {e}")
 
     await bot.send_message(user_id, text, reply_markup=kb)
 
 
 async def finish_auction(auction_id: int):
+    """
+    Завершение аукциона:
+    - если ставок нет → статус 'finished', запись в отчёт "Ставок не было"
+    - если есть → перебираем ставки от максимальной, запускаем цикл оплаты
+    """
     bids = db.get_bids_desc(auction_id)
     lot = db.get_lot(auction_id)
     if not lot:
@@ -195,6 +259,13 @@ async def process_winner_payment_cycle(
         start_price: float,
         final_price: float,
 ) -> bool:
+    """
+    Запускает цикл оплаты для текущего победителя:
+    - отправляем ссылку + QR
+    - ждём PAYMENT_TIMEOUT_MIN минут
+    - если Freekassa webhook подтвердит оплату → success
+    - иначе → предупреждение + авто-блок при 3 неоплатах
+    """
     db.set_winner(auction_id, user_id)
     db.insert_payment(auction_id, user_id, final_price, "pending")
 
@@ -209,7 +280,8 @@ async def process_winner_payment_cycle(
         f"Ссылка для оплаты:\n{payment_url}"
     )
     try:
-        await bot.send_photo(user_id, open(qr_path, "rb"), caption=text)
+        with open(qr_path, "rb") as f:
+            await bot.send_photo(user_id, f, caption=text)
     except Exception:
         await bot.send_message(user_id, text)
 
@@ -245,7 +317,7 @@ async def cmd_start(message: types.Message):
     banned_text = ""
     if user and user[2]:
         if user[2] > datetime.datetime.now():
-            banned_text = f"\n\n⚠ Вы заблокированы для участия до {user[2]}"
+            banned_text = f"\n\n⚠ Вы заблокированы для участия до {format_dt(user[2])}"
 
     kb = InlineKeyboardMarkup()
     kb.add(
@@ -255,8 +327,6 @@ async def cmd_start(message: types.Message):
     kb.add(
         InlineKeyboardButton("📜 Правила", callback_data="help"),
     )
-
-    # кнопка админки тоже можно добавить (видна всем, но проверка прав в /admin)
     kb.add(
         InlineKeyboardButton("⚙ Админ-панель", callback_data="admin_menu"),
     )
@@ -272,9 +342,11 @@ async def cb_help(callback: types.CallbackQuery):
     await callback.message.answer(
         "Правила аукциона:\n"
         f"- Минимальный шаг ставки: {MIN_STEP}₽.\n"
-        "- Если до конца аукциона < 10 минут и приходит новая ставка, время продлевается до 10 минут.\n"
+        "- Изначальная длительность аукциона: 12 часов.\n"
+        "- Если до конца аукциона < 10 минут и приходит новая ставка,\n"
+        "  время продлевается до 10 минут.\n"
         "- Победитель получает ссылку и QR для оплаты.\n"
-        "- На оплату даётся 15 минут, при неоплате шанс переходит следующему по ставке.\n"
+        "- На оплату даётся 15 минут, при неоплате шанс переходит следующему.\n"
         "- Многократная неоплата ведёт к блокировке."
     )
     await callback.answer()
@@ -288,10 +360,10 @@ async def cb_view_auctions(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    text_lines = []
+    lines = []
     for auction_id, name, cur_price, status in rows:
-        text_lines.append(f"№{auction_id} — {name} — {cur_price}₽ — {status}")
-    await callback.message.answer("Актуальные аукционы:\n" + "\n".join(text_lines))
+        lines.append(f"№{auction_id} — {name} — {cur_price}₽ — {status}")
+    await callback.message.answer("Актуальные аукционы:\n" + "\n".join(lines))
     await callback.answer()
 
 
@@ -393,7 +465,12 @@ async def cmd_bid(message: types.Message):
     await process_bid(message, user_id, auction_id, amount)
 
 
-async def process_bid(message_or_msg: types.Message, user_id: int, auction_id: int, bid_amount: float):
+async def process_bid(
+        message_or_msg: types.Message,
+        user_id: int,
+        auction_id: int,
+        bid_amount: float,
+):
     lot = db.get_lot(auction_id)
     if not lot:
         await message_or_msg.reply("Такого аукциона не существует.")
@@ -412,6 +489,7 @@ async def process_bid(message_or_msg: types.Message, user_id: int, auction_id: i
     db.add_bid(auction_id, user_id, bid_amount)
     db.update_current_price(auction_id, bid_amount)
 
+    # Правило 10 минут
     end_time = lot[9]
     now = datetime.datetime.now()
     if end_time:
@@ -561,7 +639,7 @@ async def cmd_ban(message: types.Message):
 
     until = datetime.datetime.now() + datetime.timedelta(days=days)
     db.set_ban(user_id, until)
-    await message.reply(f"Пользователь {user_id} забанен до {until}.")
+    await message.reply(f"Пользователь {user_id} забанен до {format_dt(until)}.")
 
 
 @dp.message_handler(commands=["unban"])
@@ -612,13 +690,13 @@ async def job_sync_and_start():
 
 
 def scheduler_setup():
-    # передаём корутину прямо, AsyncIOScheduler сам её исполнит в event loop
     scheduler.add_job(job_sync_and_start, "interval", minutes=1)
     scheduler.start()
 
 
-async def on_startup(dp: Dispatcher):
+async def on_startup(dispatcher: Dispatcher):
     scheduler_setup()
+    logging.info("Scheduler started, bot is up.")
 
 
 if __name__ == "__main__":
