@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   db:
-    image: postgres:15
+    image: postgres:13
     container_name: auction_db
     environment:
       POSTGRES_USER: postgres
@@ -15,16 +15,26 @@ services:
       - ./create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql:ro
     networks:
       - auction_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auction_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   bot:
     build: .
     container_name: auction_bot
     env_file:
       - .env
+    volumes:
+      - /root/keys:/keys
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     networks:
       - auction_net
+    restart: unless-stopped
 
   webhook:
     build: .
@@ -33,11 +43,13 @@ services:
     env_file:
       - .env
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     expose:
-      - "5000"          # только внутри сети docker
+      - "5000"
     networks:
       - auction_net
+    restart: unless-stopped
 
   caddy:
     image: caddy:2-alpine
@@ -48,7 +60,6 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # папка для сертификатов и т.п.
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -64,4 +75,3 @@ volumes:
 networks:
   auction_net:
     driver: bridge
-

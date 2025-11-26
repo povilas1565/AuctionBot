@@ -1,12 +1,14 @@
 import asyncio
 import datetime
 import logging
+import time
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
+from sqlalchemy.dialects.postgresql import psycopg2
 
 from config import (
     API_TOKEN,
@@ -24,8 +26,34 @@ from config import (
 from models import Database
 from google_sheets import fetch_base_lots, append_report_row
 from payment import generate_payment_url, generate_qr
+import psycopg2
+from psycopg2 import OperationalError
 
 logging.basicConfig(level=logging.INFO)
+
+
+def wait_for_db(db_uri, max_retries=30, delay=2):
+    """Ждем пока база данных станет доступной"""
+    for i in range(max_retries):
+        try:
+            conn = psycopg2.connect(db_uri)
+            conn.close()
+            print("✅ Database is ready!")
+            return True
+        except OperationalError as e:
+            print(f"⏳ Database not ready yet (attempt {i + 1}/{max_retries}): {e}")
+            if i < max_retries - 1:
+                time.sleep(delay)
+    return False
+
+
+# Ожидаем готовности БД перед подключением
+if not wait_for_db(DB_URI):
+    print("❌ Failed to connect to database after multiple attempts")
+    exit(1)
+
+# Теперь можно инициализировать базу данных
+db = Database(DB_URI)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)

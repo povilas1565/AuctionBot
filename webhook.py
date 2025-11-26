@@ -1,11 +1,37 @@
+import time
+
+import psycopg2
 from flask import Flask, request
 import hashlib
+
+from psycopg2 import OperationalError
 
 from config import DB_URI, FREEKASSA_SECRET_2
 from models import Database
 
-app = Flask(__name__)
+
+def wait_for_db(db_uri, max_retries=30, delay=2):
+    """Ждем пока база данных станет доступной"""
+    for i in range(max_retries):
+        try:
+            conn = psycopg2.connect(db_uri)
+            conn.close()
+            print("✅ Database is ready!")
+            return True
+        except OperationalError as e:
+            print(f"⏳ Database not ready yet (attempt {i + 1}/{max_retries}): {e}")
+            if i < max_retries - 1:
+                time.sleep(delay)
+    return False
+
+
+# Ожидаем готовности БД перед подключением
+if not wait_for_db(DB_URI):
+    print("❌ Failed to connect to database after multiple attempts")
+    exit(1)
+
 db = Database(DB_URI)
+app = Flask(__name__)
 
 
 @app.route("/freekassa_webhook", methods=["POST"])
@@ -37,4 +63,3 @@ def freekassa_webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-
