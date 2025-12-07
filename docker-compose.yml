@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   db:
-    image: postgres:13
+    image: postgres:16-alpine
     container_name: auction_db
     environment:
       POSTGRES_USER: postgres
@@ -12,44 +12,84 @@ services:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql:ro
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - auction_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d auction_db"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: auction_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - auction_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
 
   bot:
     build: .
     container_name: auction_bot
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Moscow
     env_file:
       - .env
     volumes:
       - /root/keys:/keys
+      - qr_codes:/app/qr_codes
+      - ./logs:/app/logs
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - auction_net
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   webhook:
     build: .
     container_name: auction_webhook
     command: python webhook.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Moscow
     env_file:
       - .env
+    volumes:
+      - /root/keys:/keys
+      - qr_codes:/app/qr_codes
+      - ./logs:/app/logs
     depends_on:
       db:
         condition: service_healthy
-    expose:
-      - "5000"
+    ports:
+      - "5000:5000"
     networks:
       - auction_net
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   caddy:
     image: caddy:2-alpine
@@ -69,8 +109,10 @@ services:
 
 volumes:
   pg_data:
+  redis_data:
   caddy_data:
   caddy_config:
+  qr_codes:
 
 networks:
   auction_net:

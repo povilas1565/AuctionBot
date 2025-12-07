@@ -1,27 +1,89 @@
 import psycopg2
-from psycopg2.extras import register_default_json
+import json
 import datetime
+from psycopg2.extras import DictCursor
 
 
 class Database:
     def __init__(self, db_uri: str):
         self.db_uri = db_uri
-        self.connection = psycopg2.connect(self.db_uri)
+        self.connection = psycopg2.connect(self.db_uri, cursor_factory=DictCursor)
         self.cursor = self.connection.cursor()
-        # регистрируем json, если где-то будем его использовать
-        register_default_json(loads=lambda x: x)
+        self.init_tables()
+
+    def init_tables(self):
+        """Инициализация таблиц если их нет"""
+        tables = [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                user_name TEXT,
+                warnings INTEGER DEFAULT 0,
+                banned_until TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS lots (
+                auction_id INTEGER PRIMARY KEY,
+                name TEXT,
+                article TEXT,
+                start_price DECIMAL(10,2),
+                current_price DECIMAL(10,2),
+                images TEXT,
+                video_url TEXT,
+                description TEXT,
+                start_time TIMESTAMP,
+                end_time TIMESTAMP,
+                status TEXT DEFAULT 'pending',
+                winner_user_id BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS bids (
+                id SERIAL PRIMARY KEY,
+                auction_id INTEGER REFERENCES lots(auction_id),
+                user_id BIGINT,
+                amount DECIMAL(10,2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(auction_id, user_id, amount)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                id SERIAL PRIMARY KEY,
+                auction_id INTEGER,
+                user_id BIGINT,
+                amount DECIMAL(10,2),
+                payment_status TEXT DEFAULT 'pending',
+                payment_id TEXT,
+                paid_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        ]
+
+        for table_sql in tables:
+            try:
+                self.execute(table_sql)
+            except Exception as e:
+                print(f"Error creating table: {e}")
 
     def execute(self, query, params=None):
         self.cursor.execute(query, params or ())
         self.connection.commit()
+        return self.cursor
 
     def fetchone(self, query, params=None):
         self.cursor.execute(query, params or ())
-        return self.cursor.fetchone()
+        result = self.cursor.fetchone()
+        return dict(result) if result else None
 
     def fetchall(self, query, params=None):
         self.cursor.execute(query, params or ())
-        return self.cursor.fetchall()
+        results = self.cursor.fetchall()
+        return [dict(row) for row in results]
 
     # --- Users ---
 
@@ -34,7 +96,7 @@ class Database:
         self.execute(q, (user_id, user_name))
 
     def get_user(self, user_id: int):
-        q = "SELECT user_id, warnings, banned_until FROM users WHERE user_id = %s"
+        q = "SELECT * FROM users WHERE user_id = %s"
         return self.fetchone(q, (user_id,))
 
     def add_warning_auto_ban(self, user_id: int, ban_days: int):
@@ -42,15 +104,12 @@ class Database:
         user = self.get_user(user_id)
         if user is None:
             return
-        _, warnings, _ = user
-        warnings = (warnings or 0) + 1
+        warnings = user.get('warnings', 0) + 1
         banned_until = None
         if warnings >= 3:
             banned_until = datetime.datetime.now() + datetime.timedelta(days=ban_days)
         q = "UPDATE users SET warnings = %s, banned_until = %s WHERE user_id = %s"
         self.execute(q, (warnings, banned_until, user_id))
-
-    # Админские методы:
 
     def set_ban(self, user_id: int, until: datetime.datetime | None):
         q = "UPDATE users SET banned_until = %s WHERE user_id = %s"
@@ -60,8 +119,7 @@ class Database:
         user = self.get_user(user_id)
         if user is None:
             return
-        _, warnings, _ = user
-        warnings = (warnings or 0) + 1
+        warnings = user.get('warnings', 0) + 1
         q = "UPDATE users SET warnings = %s WHERE user_id = %s"
         self.execute(q, (warnings, user_id))
 
@@ -77,6 +135,7 @@ class Database:
                           images, video_url, description, start_time, status)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
         """
+        images_json = json.dumps(images) if isinstance(images, list) else images
         self.execute(
             q,
             (
@@ -85,7 +144,7 @@ class Database:
                 article,
                 start_price,
                 start_price,
-                images,
+                images_json,
                 video_url,
                 description,
                 start_time,
@@ -107,9 +166,7 @@ class Database:
 
     def get_lot(self, auction_id: int):
         q = """
-        SELECT auction_id, name, article, start_price, current_price,
-               images, video_url, description, start_time, end_time, status, winner_user_id
-        FROM lots WHERE auction_id = %s
+        SELECT * FROM lots WHERE auction_id = %s
         """
         return self.fetchone(q, (auction_id,))
 
@@ -141,6 +198,11 @@ class Database:
     # --- Bids ---
 
     def add_bid(self, auction_id: int, user_id: int, amount):
+        # Удаляем старую ставку этого пользователя
+        q_delete = "DELETE FROM bids WHERE auction_id = %s AND user_id = %s"
+        self.execute(q_delete, (auction_id, user_id))
+
+        # Добавляем новую ставку
         q = "INSERT INTO bids (auction_id, user_id, amount) VALUES (%s, %s, %s)"
         self.execute(q, (auction_id, user_id, amount))
 
@@ -154,12 +216,12 @@ class Database:
 
     # --- Payments ---
 
-    def insert_payment(self, auction_id: int, user_id: int, amount, status: str):
+    def insert_payment(self, auction_id: int, user_id: int, amount, payment_id: str, status: str = "pending"):
         q = """
-        INSERT INTO payments (auction_id, user_id, amount, payment_status)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO payments (auction_id, user_id, amount, payment_status, payment_id)
+        VALUES (%s, %s, %s, %s, %s)
         """
-        self.execute(q, (auction_id, user_id, amount, status))
+        self.execute(q, (auction_id, user_id, amount, status, payment_id))
 
     def update_payment_status(self, auction_id: int, user_id: int, status: str):
         q = """
@@ -167,6 +229,8 @@ class Database:
         SET payment_status = %s,
             paid_at = CASE WHEN %s = 'completed' THEN NOW() ELSE paid_at END
         WHERE auction_id = %s AND user_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
         """
         self.execute(q, (status, status, auction_id, user_id))
 
@@ -176,4 +240,5 @@ class Database:
         WHERE auction_id = %s AND user_id = %s
         ORDER BY id DESC LIMIT 1
         """
-        return self.fetchone(q, (auction_id, user_id))
+        result = self.fetchone(q, (auction_id, user_id))
+        return result.get('payment_status') if result else None

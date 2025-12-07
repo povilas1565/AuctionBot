@@ -22,15 +22,14 @@ GOOGLE_SHEET_ID = os.getenv(
 LOTS_SHEET_NAME = os.getenv("LOTS_SHEET_NAME", "LOTS_BASE")
 REPORT_SHEET_NAME = os.getenv("REPORT_SHEET_NAME", "REPORT")
 
-# Freekassa
-FREEKASSA_SECRET_1 = os.getenv("FREEKASSA_SECRET_1", "your_freekassa_secret_key_1")
-FREEKASSA_SECRET_2 = os.getenv("FREEKASSA_SECRET_2", "your_freekassa_secret_key_2")
-FREEKASSA_MERCHANT_ID = os.getenv("FREEKASSA_MERCHANT_ID", "your_freekassa_merchant_id")
-FREEKASSA_BASE_URL = os.getenv("FREEKASSA_URL", "https://pay.freekassa.ru/")
+# ЮKassa (заменили Freekassa)
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "1209483")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "live_7cEvDkMWWqSDjp-j1qFF44_7815Mnet-E3LbuMiDYT8")
+YOOKASSA_BASE_URL = "https://yoomoney.ru/checkout/payments/v2/contract"
 
-# Webhook Freekassa
+# Webhook ЮKassa
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://yourdomain.com")
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/freekassa_webhook")
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/yookassa_webhook")
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 # Канал аукционов (сюда бот публикует лоты)
@@ -48,11 +47,9 @@ MAX_UNPAID_WARNINGS = 3
 BAN_DAYS = 30
 
 ADMIN_IDS = [
-    7529623175,  # твой id
+    7529623175,
+    196831832
 ]
-
-
-
 
 
 
