@@ -47,7 +47,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./cenolover-1-21eedf45d165.json:/app/cenolover-1-21eedf45d165.json:ro
+      - /root/keys/celenov.json:/app/cenolover-1-21eedf45d165.json:ro
       - qr_codes:/app/qr_codes
       - logs:/app/logs
     depends_on:
@@ -74,7 +74,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./cenolover-1-21eedf45d165.json:/app/cenolover-1-21eedf45d165.json:ro
+      - /root/keys/celenov.json:/app/cenolover-1-21eedf45d165.json:ro
       - qr_codes:/app/qr_codes
       - logs:/app/logs
     depends_on:
