@@ -1,7 +1,10 @@
 import psycopg2
 import json
 import datetime
+import logging
 from psycopg2.extras import DictCursor
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -61,6 +64,27 @@ class Database:
                 paid_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_lots_auction_id ON lots(auction_id);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_lots_status ON lots(status);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_lots_end_time ON lots(end_time);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_bids_auction_id ON bids(auction_id);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_bids_user_id ON bids(user_id);
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id);
             """
         ]
 
@@ -68,22 +92,35 @@ class Database:
             try:
                 self.execute(table_sql)
             except Exception as e:
-                print(f"Error creating table: {e}")
+                logger.error(f"❌ Error creating table/index: {e}")
 
     def execute(self, query, params=None):
-        self.cursor.execute(query, params or ())
-        self.connection.commit()
-        return self.cursor
+        try:
+            self.cursor.execute(query, params or ())
+            self.connection.commit()
+            return self.cursor
+        except Exception as e:
+            logger.error(f"❌ Ошибка выполнения запроса: {e}")
+            self.connection.rollback()
+            raise
 
     def fetchone(self, query, params=None):
-        self.cursor.execute(query, params or ())
-        result = self.cursor.fetchone()
-        return dict(result) if result else None
+        try:
+            self.cursor.execute(query, params or ())
+            result = self.cursor.fetchone()
+            return dict(result) if result else None
+        except Exception as e:
+            logger.error(f"❌ Ошибка fetchone: {e}")
+            return None
 
     def fetchall(self, query, params=None):
-        self.cursor.execute(query, params or ())
-        results = self.cursor.fetchall()
-        return [dict(row) for row in results]
+        try:
+            self.cursor.execute(query, params or ())
+            results = self.cursor.fetchall()
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"❌ Ошибка fetchall: {e}")
+            return []
 
     # --- Users ---
 
@@ -94,6 +131,7 @@ class Database:
         ON CONFLICT (user_id) DO UPDATE SET user_name = EXCLUDED.user_name
         """
         self.execute(q, (user_id, user_name))
+        logger.debug(f"👤 User upserted: {user_id}")
 
     def get_user(self, user_id: int):
         q = "SELECT * FROM users WHERE user_id = %s"
@@ -108,12 +146,14 @@ class Database:
         banned_until = None
         if warnings >= 3:
             banned_until = datetime.datetime.now() + datetime.timedelta(days=ban_days)
+            logger.info(f"🔨 Автобан пользователя {user_id} на {ban_days} дней (warnings={warnings})")
         q = "UPDATE users SET warnings = %s, banned_until = %s WHERE user_id = %s"
         self.execute(q, (warnings, banned_until, user_id))
 
     def set_ban(self, user_id: int, until: datetime.datetime | None):
         q = "UPDATE users SET banned_until = %s WHERE user_id = %s"
         self.execute(q, (until, user_id))
+        logger.info(f"🔨 Set ban for user {user_id}: {until}")
 
     def increment_warning(self, user_id: int):
         user = self.get_user(user_id)
@@ -122,6 +162,7 @@ class Database:
         warnings = user.get('warnings', 0) + 1
         q = "UPDATE users SET warnings = %s WHERE user_id = %s"
         self.execute(q, (warnings, user_id))
+        logger.info(f"⚠ Warning added for user {user_id} (total: {warnings})")
 
     # --- Lots ---
 
@@ -150,6 +191,7 @@ class Database:
                 start_time,
             ),
         )
+        logger.info(f"📦 Lot created: {auction_id} '{name}'")
 
     def get_lots_to_start(self):
         now = datetime.datetime.now()
@@ -159,10 +201,12 @@ class Database:
     def set_lot_status(self, auction_id: int, status: str):
         q = "UPDATE lots SET status = %s WHERE auction_id = %s"
         self.execute(q, (status, auction_id))
+        logger.debug(f"📊 Lot {auction_id} status changed to {status}")
 
     def set_lot_end_time(self, auction_id: int, end_time: datetime.datetime):
         q = "UPDATE lots SET end_time = %s WHERE auction_id = %s"
         self.execute(q, (end_time, auction_id))
+        logger.debug(f"⏰ Lot {auction_id} end_time set to {end_time}")
 
     def get_lot(self, auction_id: int):
         q = """
@@ -173,10 +217,12 @@ class Database:
     def update_current_price(self, auction_id: int, amount):
         q = "UPDATE lots SET current_price = %s WHERE auction_id = %s"
         self.execute(q, (amount, auction_id))
+        logger.debug(f"💰 Lot {auction_id} price updated to {amount}")
 
     def set_winner(self, auction_id: int, user_id: int | None):
         q = "UPDATE lots SET winner_user_id = %s WHERE auction_id = %s"
         self.execute(q, (user_id, auction_id))
+        logger.info(f"👑 Winner set for lot {auction_id}: {user_id}")
 
     def get_active_or_pending_lots(self):
         q = """
@@ -205,6 +251,7 @@ class Database:
         # Добавляем новую ставку
         q = "INSERT INTO bids (auction_id, user_id, amount) VALUES (%s, %s, %s)"
         self.execute(q, (auction_id, user_id, amount))
+        logger.debug(f"💰 Bid added: auction {auction_id}, user {user_id}, amount {amount}")
 
     def get_bids_desc(self, auction_id: int):
         q = "SELECT user_id, amount FROM bids WHERE auction_id = %s ORDER BY amount DESC"
@@ -222,6 +269,7 @@ class Database:
         VALUES (%s, %s, %s, %s, %s)
         """
         self.execute(q, (auction_id, user_id, amount, status, payment_id))
+        logger.info(f"💳 Payment created: auction {auction_id}, user {user_id}, amount {amount}, id {payment_id}")
 
     def update_payment_status(self, auction_id: int, user_id: int, status: str):
         q = """
@@ -233,6 +281,7 @@ class Database:
         LIMIT 1
         """
         self.execute(q, (status, status, auction_id, user_id))
+        logger.info(f"💳 Payment status updated: auction {auction_id}, user {user_id}, status {status}")
 
     def get_latest_payment(self, auction_id: int, user_id: int):
         q = """

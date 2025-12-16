@@ -13,11 +13,11 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 # Google Sheets API settings
 GOOGLE_SHEET_CREDENTIALS = os.getenv(
     "GOOGLE_SHEET_CREDENTIALS",
-    "celenov-shop-bot-7e2c6e28ecb0.json",
+    "cenolover-1-21eedf45d165.json",
 )
 GOOGLE_SHEET_ID = os.getenv(
     "GOOGLE_SHEET_ID",
-    "1eXreh4wiN6ZDwjK2yVxQFBM8Oq5bTG_B4RXkOgr53a8",
+    "1bG2Re3zEmuKQGZPPUQlIBJ5I2p6IHcfz_SfxJVH3c9E",
 )
 LOTS_SHEET_NAME = os.getenv("LOTS_SHEET_NAME", "LOTS_BASE")
 REPORT_SHEET_NAME = os.getenv("REPORT_SHEET_NAME", "REPORT")

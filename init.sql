@@ -77,7 +77,3 @@ BEGIN
     RETURN NEW;
 END;
 $$ language 'plpgsql';
-
--- Триггеры (опционально)
--- CREATE TRIGGER update_users_modtime BEFORE UPDATE ON users
--- FOR EACH ROW EXECUTE FUNCTION update_modified_column();

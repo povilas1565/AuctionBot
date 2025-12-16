@@ -19,10 +19,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Создаем директорию для QR-кодов
-RUN mkdir -p /app/qr_codes
+RUN mkdir -p /app/qr_codes /app/logs
 
 # Устанавливаем рабочую директорию для QR-кодов
 ENV QR_PATH=/app/qr_codes
+
+# Копируем файл с ключами Google (если есть)
+RUN if [ -f "cenolover-1-21eedf45d165.json" ]; then \
+    echo "✅ Google credentials found"; \
+    else \
+    echo "⚠️ Google credentials not found"; \
+    fi
 
 # По умолчанию запускаем бота
 CMD ["python", "bot.py"]

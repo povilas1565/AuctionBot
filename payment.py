@@ -1,11 +1,13 @@
 import uuid
 import qrcode
-import base64
 import json
 import requests
-from typing import Dict, Tuple
+import logging
+from typing import Tuple
 
-from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, YOOKASSA_BASE_URL
+from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY
+
+logger = logging.getLogger(__name__)
 
 
 def generate_payment_url(auction_id: int, user_id: int, amount: float) -> Tuple[str, str]:
@@ -29,7 +31,7 @@ def generate_payment_url(auction_id: int, user_id: int, amount: float) -> Tuple[
         "capture": True,
         "confirmation": {
             "type": "redirect",
-            "return_url": f"https://t.me/cenolover"  # URL для возврата после оплаты
+            "return_url": f"https://t.me/cenolover"
         },
         "description": f"Оплата аукциона №{auction_id}. Пользователь: {user_id}",
         "metadata": {
@@ -40,33 +42,50 @@ def generate_payment_url(auction_id: int, user_id: int, amount: float) -> Tuple[
     }
 
     try:
+        logger.info(f"💳 Создание платежа ЮKassa: аукцион {auction_id}, сумма {amount}₽")
+
         response = requests.post(
-            f"https://api.yookassa.ru/v3/payments",
+            "https://api.yookassa.ru/v3/payments",
             headers=headers,
-            data=json.dumps(payload)
+            data=json.dumps(payload),
+            timeout=10
         )
 
         if response.status_code == 200:
             payment_data = response.json()
             payment_url = payment_data.get("confirmation", {}).get("confirmation_url", "")
             payment_id = payment_data.get("id", payment_id)
+
+            logger.info(f"✅ Платеж ЮKassa создан: {payment_id}")
+            logger.debug(f"🔗 Ссылка на оплату: {payment_url}")
+
             return payment_url, payment_id
         else:
+            logger.error(f"❌ Ошибка API ЮKassa: {response.status_code} - {response.text}")
             # Fallback URL если API не работает
             return f"https://yoomoney.ru/transfer?to={YOOKASSA_SHOP_ID}&sum={amount}&label={auction_id}_{user_id}", payment_id
 
+    except requests.exceptions.Timeout:
+        logger.error(f"❌ Таймаут при создании платежа ЮKassa")
+        return f"https://yoomoney.ru/transfer?to={YOOKASSA_SHOP_ID}&sum={amount}&label={auction_id}_{user_id}", payment_id
     except Exception as e:
-        # Fallback URL в случае ошибки
-        print(f"Error creating YooKassa payment: {e}")
+        logger.error(f"❌ Ошибка создания платежа ЮKassa: {e}")
         return f"https://yoomoney.ru/transfer?to={YOOKASSA_SHOP_ID}&sum={amount}&label={auction_id}_{user_id}", payment_id
 
 
 def generate_qr(payment_url: str) -> str:
     """Генерация QR-кода для оплаты"""
-    img = qrcode.make(payment_url)
-    path = f"qr_{uuid.uuid4().hex[:8]}.png"
-    img.save(path)
-    return path
+    try:
+        logger.info(f"🖼 Генерация QR-кода для ссылки")
+        img = qrcode.make(payment_url)
+        path = f"qr_{uuid.uuid4().hex[:8]}.png"
+        img.save(path)
+        logger.info(f"✅ QR-код сохранен: {path}")
+        return path
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации QR-кода: {e}")
+        # Возвращаем дефолтный путь
+        return f"qr_error.png"
 
 
 def check_payment_status(payment_id: str) -> str:
@@ -78,14 +97,21 @@ def check_payment_status(payment_id: str) -> str:
     try:
         response = requests.get(
             f"https://api.yookassa.ru/v3/payments/{payment_id}",
-            headers=headers
+            headers=headers,
+            timeout=5
         )
 
         if response.status_code == 200:
             payment_data = response.json()
-            return payment_data.get("status", "pending")
+            status = payment_data.get("status", "pending")
+            logger.debug(f"🔍 Статус платежа {payment_id}: {status}")
+            return status
+        else:
+            logger.warning(f"⚠️ Не удалось проверить статус платежа {payment_id}: {response.status_code}")
+            return "pending"
+    except requests.exceptions.Timeout:
+        logger.warning(f"⚠️ Таймаут при проверке статуса платежа {payment_id}")
+        return "pending"
     except Exception as e:
-        print(f"Error checking payment status: {e}")
-
-    return "pending"
-
+        logger.error(f"❌ Ошибка проверки статуса платежа {payment_id}: {e}")
+        return "pending"

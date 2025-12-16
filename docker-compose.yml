@@ -47,9 +47,9 @@ services:
     env_file:
       - .env
     volumes:
-      - /root/keys:/keys
+      - ./cenolover-1-21eedf45d165.json:/app/cenolover-1-21eedf45d165.json:ro
       - qr_codes:/app/qr_codes
-      - ./logs:/app/logs
+      - logs:/app/logs
     depends_on:
       db:
         condition: service_healthy
@@ -74,9 +74,9 @@ services:
     env_file:
       - .env
     volumes:
-      - /root/keys:/keys
+      - ./cenolover-1-21eedf45d165.json:/app/cenolover-1-21eedf45d165.json:ro
       - qr_codes:/app/qr_codes
-      - ./logs:/app/logs
+      - logs:/app/logs
     depends_on:
       db:
         condition: service_healthy
@@ -91,28 +91,11 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: auction_caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - webhook
-    networks:
-      - auction_net
-
 volumes:
   pg_data:
   redis_data:
-  caddy_data:
-  caddy_config:
   qr_codes:
+  logs:
 
 networks:
   auction_net:
